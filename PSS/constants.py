@@ -8,7 +8,11 @@ SUBJECTS_REGISTRY = "subjects.json"
 #EEG <-SPECIFIC TO THE DEVICE
 EEG_BOARD_ID = 0
 EEG_SAMPLING_RATE = 250 #HZ
-EEG_CHANNEL = ""
+EEG_CHANNEL = [0,1]
+"""
+Fz <- index 0-> N1P
+Cz <- index 1-> N2P
+"""
 
 #EEG FREQUENCY BANDS
 THETA_BAND = (4.0,7.0) #tuples

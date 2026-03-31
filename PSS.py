@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import scipy
 from scipy import stats
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
-from scipy.signal import butter, filtfilt, hilbert #Fourier Transform
+from scipy.signal import butter, filtfilt, hilbert, iirnotch #Fourier Transform
 from scipy.optimize import curve_fit
 import mne
 import random
@@ -76,17 +76,71 @@ def connect_eeg():
         print("EEG successfully connected")  
     except:
          print("Connection Failed")
-
+        
 
 #start EEG <- board.start_stream()
 #stop <- board.stop_stream()
+#gamma, theta
+def notch_filter(data, fs, freq = 60.0):
+    # b,a = irrnotch() <- freq, 30.0, fs
+    b,a = irrnotch(freq,30, fs)
+    #filtfilt() <- b, a, data <- fourier transform <- smooth by finding nearest trig function to raw signal
+    return filtfilt(b,a, data)
 
+    
+    
 
-def get_eeg_data(board, num_samples = 250):
-    """Gets the board data using the num_samples variable and eeg channels using board id before returning."""
+def get_eeg_data(board, num_samples = 250, baseline_pct = 0.2):
+    """Function to get EEG data and preprocess by: notching, channel average, baselining"""
     data = board.get_current_board_data(num_samples)
     eeg_channels = board.get_eeg_channels(EEG_BOARD_ID)
-    return data[eeg_channels[EEG_CHANNEL], :]
+    #fz, cz, m1, m2, 
+    #TODO: list of lists <- egg_channels[0] and eeg_channels[1]
+    selected_eeg_channels = [eeg_channels[EEG_CHANNEL[0]],eeg_channels[EEG_CHANNEL[1]]]
+    # np.mean, 
+    mean_selected_channels = np.mean(data[selected_eeg_channels, :], axis = 0)
+    #TODO: call notch on mean_selected_channels
+    notched = notch_filter(mean_selected_channels, EEG_SAMPLING_RATE)
+    #TODO: Baselining  <- How much did the brain activity change in response to the environment, Normalize the data
+    baseline_samples = int(len(notched) * baseline_pct) # 10
+    # str(), float() <- casting 
+    # TODO: Calculate the mean of the baseline samples
+    # notched[:baselines_samples]
+    baseline_mean = np.mean(notched[:baseline_samples])
+    return notched - baseline_mean
+
+def verify_electrode_setup(board, num_samples = 500):
+    if not board:
+        print("No board connected -skipping verification")
+        return
+    
+    data = board.get_current_board_data(num_samples) #the last 500 samples
+
+    eeg_channels = BoardShim.get_eeg_channels(EEG_BOARD_ID) #channel names to index mapping
+    """
+    name: index
+    """
+
+    #TODO: 
+    FZ_INDEX = EEG_CHANNEL[0]
+    CZ_INDEX = EEG_CHANNEL[1]
+    for name, idx in [("Fz (N1P)", FZ_INDEX), ("Cz (N2P)", CZ_INDEX)]:
+        #TODO: Index into eeg_channels and get the channel at idx
+        current_eeg_channel = eeg_channels[idx]
+        #TODO: Use np.mean to get the mean of the channel
+        mean_current_eeg_channel = np.mean(data[current_eeg_channel])
+        #TODO: np.std to get the standard deviation of the channel
+        std_current_eeg_channel = np.std(data[current_eeg_channel])
+        #TODO: check<- 10 <std <100 -> Good, otherwise -> Bad
+        if 10 < std_current_eeg_channel < 100:
+            print("The connection is good.")
+        else:
+            print("The connection is not stable")
+        #TODO: Print out mean and std with f string <- for human reading
+        print(f"The mean of channel: {name} is {mean_current_eeg_channel}, and the standard deviation is: {std_current_eeg_channel}")
+
+
+
 
 #Channel 1: [4,4.0,2.0, 1.0, 20.0]
  
@@ -148,7 +202,32 @@ def find_optimal_phase(theta_phase, gamma_amps, bin_width = 20):
        #TODO: return best phase is, list of averages, bin centers
     return optimal_phase, mean_gamma_per_bin, bin_centers
 
-        
+
+def show_fixation_cross(duration= 15.0):
+    input("A small cross will appear. Focus both eyes on the cross. Press enter to continue.")
+    fig, ax = plt.subplots(figsize = (4,4)) #figure, axis
+    ax.plot([0], [0], 'w+', markersize = 50, markeredgewidth = 3)
+    ax.set_xlim(-1,1)
+    ax.set_ylim(-1,1)
+    ax.axis('off')
+    ax.set_facecolor("black") #changing the background
+    fig.patch.set_facecolor('black')
+    plt.tight_layout() #format the graph <- overlapping
+    plt.show(block = False)
+    plt.draw()
+    """
+    start_time = time.time()
+    end_time = time.time()
+    time.time() <- what is the current time<- HH:MM:SS<- 
+    """
+    #TODO: using the time library <- use a while loop to time out the duration
+    #TODO: plt.pause(0.01)<- make it continue to show, once the while loop is over <- plt.close()
+    start_time = time.time()
+    while  time.time()- start_time < duration:
+        plt.pause(0.01)
+    plt.close()
+    
+
 
 
     
@@ -173,7 +252,7 @@ def connect_arduino():
 
 def send_stimulus(serial_number, soa_ms, led_ms = 50, buzzer_ms= 50):
     """Sends light/buzzer at soa"""
-    cmd = f"S,{int(soa_ms),{led_ms}, {buzzer_ms}}\n"
+    cmd = f"S,{int(soa_ms)},{int(led_ms)}, {int(buzzer_ms)}\n"
     serial_number.write(cmd.encode('utf-8'))
     time.sleep(0.3)
     
@@ -324,6 +403,7 @@ def run_block1(board, subject_id, subject_name):
      """"Records EEG data for 3 minutes on eyes opened and eyes closed before saving."""
      #Eyes closed
      print(f"Block 1 resting eeg of {subject_name}")
+     show_fixation_cross()
      board.start_stream() #Start the EEG recording
      input("Press enter to begin recording eeg. Keep your eyes closed during the recording.")
      block_closed_start= time.time() #start of the block
@@ -331,6 +411,7 @@ def run_block1(board, subject_id, subject_name):
      block_closed_end= time.time() #end of the block
      
       #Eyes open
+      
      input("Press enter to begin recording eeg. Keep your eyes open during the recording.")
      block_open_start = time.time()
      time.sleep(180)
@@ -354,10 +435,11 @@ def run_block1(board, subject_id, subject_name):
 
 #Block 2: Open-Loop Pre-test
 def run_block2(arduino, subject_id, subject_name):
+    show_fixation_cross()
     #instructions
     print("This is block 2. This is to estimate your PSS.")
     print("In this trial we will play a light and a buzzer. Press \"L\" if you think light came first, press \"S\" if you think sound came first, and \"=\" if they came at the same time. ")
-
+    
     trials = []
     # -150 <- 20 times
     for i in range(len(SOA_VALUES)):
@@ -456,6 +538,7 @@ def run_block3(arduino, board, pss, subject_id, subject_name):
         "optimal_phase": [],
         "subject_id": [],
     }
+    show_fixation_cross()
     print("Block 3 is starting, stimuli will be delivered at PSS.")
     input("Brain activity will be recorded. Press enter when ready.")
 
@@ -563,6 +646,7 @@ def wait_for_target_phase(board, target_phase, tolerance_deg = 15, window_simple
 
 
 def run_block4(arduino, board, pss, optimal_phase, subject_id, subject_name):
+    show_fixation_cross()
     print("This will flash stimuli at different times.")
     print("Press L for light first, S for sound first, or = for if they were equal.")
     trials = []
@@ -631,25 +715,26 @@ def run_block4(arduino, board, pss, optimal_phase, subject_id, subject_name):
 def main():
     BRAIN_DATA = "BrainData"
     os.makedirs(BRAIN_DATA, exist_ok = True) #making the folder
+    show_fixation_cross(duration = 15)
 
     #subject information
 
-    subject_registry = load_subject_registry() #{"subjects": [A.S., J.S., ], "next_id": 4}
-    subjects_lst =subject_registry["subjects"]
-    if subjects_lst:
-        print("Subject initials    Subject ID")
-        for i in range(len(subjects_lst)):
-            print(f"{subjects_lst[i]} {i+1}")
-    subject_initials = input("What are your initials? ")
-    subjects_lst.append(subject_initials)
-    current_subject_id = subject_registry["next_id"]
-    subject_registry["next_id"] += 1
-    save_subject_registry(subject_registry)
-    # go through all blocks for this subject
-    #Connnect the EEG
-    connect_arduino()
-    connect_eeg()
-
+    # subject_registry = load_subject_registry() #{"subjects": [A.S., J.S., ], "next_id": 4}
+    # subjects_lst =subject_registry["subjects"]
+    # if subjects_lst:
+    #     print("Subject initials    Subject ID")
+    #     for i in range(len(subjects_lst)):
+    #         print(f"{subjects_lst[i]} {i+1}")
+    # subject_initials = input("What are your initials? ")
+    # subjects_lst.append(subject_initials)
+    # current_subject_id = subject_registry["next_id"]
+    # subject_registry["next_id"] += 1
+    # save_subject_registry(subject_registry)
+    # # go through all blocks for this subject
+    # #Connnect the EEG
+    # connect_arduino()
+    # connect_eeg()
+    # verify_electrode_setup(EEG_BOARD_ID)
     # #Block 1
     # run_block1(EEG_BOARD_ID, current_subject_id, subject_initials)
     # # Block 2
